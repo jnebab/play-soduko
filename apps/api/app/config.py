@@ -8,14 +8,28 @@ from __future__ import annotations
 
 from functools import lru_cache
 
+from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+DEFAULT_DATABASE_URL = "sqlite+aiosqlite:///./sudoku.db"
 
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
-    database_url: str = "sqlite+aiosqlite:///./sudoku.db"
+    database_url: str = DEFAULT_DATABASE_URL
     redis_url: str | None = None
+
+    @field_validator("database_url", mode="before")
+    @classmethod
+    def _default_db(cls, v: str | None) -> str:
+        # an empty env var means "use the default" (zero-config MVP)
+        return v if v else DEFAULT_DATABASE_URL
+
+    @field_validator("redis_url", mode="before")
+    @classmethod
+    def _empty_redis_is_none(cls, v: str | None) -> str | None:
+        return v or None
     cors_origins: str = "http://localhost:5173"
     pool_target: int = 8
 
