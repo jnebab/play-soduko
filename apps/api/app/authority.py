@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import random
 import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
@@ -61,6 +62,7 @@ class GameAuthority:
         settings: Settings,
         persist: bool = True,
         on_finish: Callable[[str], Awaitable[None]] | None = None,
+        bots: set[str] | None = None,
     ) -> None:
         self.match_id = match_id
         self.difficulty = difficulty
@@ -80,9 +82,11 @@ class GameAuthority:
                 st.cells[i] = v
             self.players[p.id] = st
 
+        self._bots = bots or set()
         self._finish_order: list[str] = []
         self._progress_task: asyncio.Task[None] | None = None
         self._lifecycle_task: asyncio.Task[None] | None = None
+        self._bot_tasks: list[asyncio.Task[None]] = []
 
     # ----------------------------- lifecycle ---------------------------------
 
@@ -104,6 +108,38 @@ class GameAuthority:
             MatchStart(givens=self.givens, startTs=self.start_ts, players=players)
         )
         self._progress_task = asyncio.create_task(self._progress_loop())
+        for bot_id in self._bots:
+            self._bot_tasks.append(asyncio.create_task(self._run_bot(bot_id)))
+
+    async def _run_bot(self, bot_id: str) -> None:
+        """Solve the bot's board at a human-ish pace, producing real shadow
+        progress and a genuine (sometimes winning) finish."""
+        st = self.players.get(bot_id)
+        if st is None:
+            return
+        empties = [i for i in range(81) if self.givens[i] == 0]
+        random.shuffle(empties)
+        try:
+            await asyncio.sleep(random.uniform(0.5, 2.0))
+            for cell in empties:
+                if self.status != "playing":
+                    return
+                # occasionally fumble first (shows as a red 'wrong' cell + a mistake)
+                if random.random() < self.settings.bot_mistake_rate:
+                    await self._place(bot_id, st, cell, self._wrong_value(cell))
+                    await asyncio.sleep(random.uniform(0.4, 1.0))
+                    if self.status != "playing":
+                        return
+                await self._place(bot_id, st, cell, self._solution[cell])
+                await asyncio.sleep(
+                    random.uniform(self.settings.bot_min_move_s, self.settings.bot_max_move_s)
+                )
+        except asyncio.CancelledError:  # pragma: no cover - shutdown path
+            pass
+
+    def _wrong_value(self, cell: int) -> int:
+        correct = self._solution[cell]
+        return random.choice([v for v in range(1, 10) if v != correct])
 
     async def _progress_loop(self) -> None:
         interval = 1.0 / max(0.5, self.settings.progress_hz)
@@ -209,6 +245,12 @@ class GameAuthority:
         if self._on_finish is not None:
             await self._on_finish(self.match_id)
 
+        # Cancel bot loops LAST: when a bot completes, _finish runs inside that
+        # bot's own task — cancelling earlier would abort this method (at the
+        # next await) before matchOver is ever sent.
+        for task in self._bot_tasks:
+            task.cancel()
+
     def _compute_results(self) -> list[MatchResult]:
         # finishers first (by finish order), then the rest by filled desc / mistakes asc
         finishers = list(self._finish_order)
@@ -274,6 +316,6 @@ class GameAuthority:
             await self.manager.send(pid, msg)  # type: ignore[arg-type]
 
     async def shutdown(self) -> None:
-        for task in (self._progress_task, self._lifecycle_task):
+        for task in (self._progress_task, self._lifecycle_task, *self._bot_tasks):
             if task is not None:
                 task.cancel()

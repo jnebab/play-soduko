@@ -28,6 +28,7 @@ class User(SQLModel, table=True):
     id: str = Field(default_factory=_uuid, primary_key=True)
     handle: str = Field(index=True)
     rating: int = Field(default=1000)
+    is_bot: bool = Field(default=False, index=True)
     created_at: datetime = Field(default_factory=_now)
 
 

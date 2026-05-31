@@ -21,6 +21,7 @@ from .schemas import MatchFound, PlayerPublic
 log = logging.getLogger("sudoku.matchmaking")
 
 DEFAULT_ROOM_DIFFICULTY = "medium"
+BOT_NAMES = ["Nova", "Echo", "Pixel", "Sage", "Kuro", "Mira", "Atlas", "Wren", "Juno", "Ace"]
 
 
 def _room_code() -> str:
@@ -35,6 +36,7 @@ class Matchmaking:
         self.rooms: dict[str, dict[str, object]] = {}  # code -> {difficulty, members:[ids]}
         self.matches: dict[str, GameAuthority] = {}
         self._lock = asyncio.Lock()
+        self._bot_pending: set[str] = set()
 
     # ------------------------------ queue ------------------------------------
 
@@ -48,6 +50,41 @@ class Matchmaking:
                 chosen = ready[: self.settings.min_players]
                 self.queues[difficulty] = [pid for pid in q if pid not in chosen]
                 await self._spawn(difficulty, chosen)
+                return
+
+        # no human pairing yet — arm the bot fallback so Quick Match always races
+        if (
+            self.settings.bot_enabled
+            and self._available(player.id)
+            and player.id not in self._bot_pending
+        ):
+            self._bot_pending.add(player.id)
+            asyncio.create_task(self._bot_fallback(difficulty, player.id))
+
+    async def _bot_fallback(self, difficulty: str, player_id: str) -> None:
+        try:
+            await asyncio.sleep(self.settings.bot_wait_seconds)
+            async with self._lock:
+                self._bot_pending.discard(player_id)
+                queue = self.queues.get(difficulty, [])
+                if not self._available(player_id) or player_id not in queue:
+                    return  # got a human match (or left) in the meantime
+                queue.remove(player_id)
+                human = self.manager.get(player_id)
+                near = human.rating if human else 1000
+                bot_ids = [self._make_bot(near) for _ in range(self.settings.min_players - 1)]
+                await self._spawn(difficulty, [player_id, *bot_ids], bots=set(bot_ids))
+        except Exception:  # noqa: BLE001
+            log.exception("bot fallback failed for %s", player_id)
+        finally:
+            self._bot_pending.discard(player_id)
+
+    def _make_bot(self, near_rating: int) -> str:
+        bot_id = "bot-" + "".join(random.choices(string.ascii_lowercase + string.digits, k=8))
+        handle = f"{random.choice(BOT_NAMES)} 🤖"
+        rating = max(100, near_rating + random.randint(-80, 80))
+        self.manager.register_bot(bot_id, handle, rating)
+        return bot_id
 
     # ------------------------------ rooms ------------------------------------
 
@@ -90,7 +127,15 @@ class Matchmaking:
             return PlayerPublic(id=player_id, handle="Player", rating=1000)
         return PlayerPublic(id=p.id, handle=p.handle, rating=p.rating)
 
-    async def _spawn(self, difficulty: str, player_ids: list[str]) -> None:
+    async def _spawn(
+        self, difficulty: str, player_ids: list[str], bots: set[str] | None = None
+    ) -> None:
+        bots = bots or set()
+        for bid in bots:  # persist a bot user row so results FK + ELO work
+            bp = self.manager.get(bid)
+            if bp is not None:
+                await store.ensure_bot_user(bid, bp.handle, bp.rating)
+
         puzzle = await store.claim_puzzle(difficulty)
         match_id = await store.create_match(puzzle.id, difficulty, player_ids)
         players = [self._public(pid) for pid in player_ids]
@@ -104,6 +149,7 @@ class Matchmaking:
             manager=self.manager,
             settings=self.settings,
             on_finish=self._cleanup,
+            bots=bots,
         )
         self.matches[match_id] = authority
         for pid in player_ids:
@@ -128,7 +174,11 @@ class Matchmaking:
             return
         for pid in authority.players:
             p = self.manager.get(pid)
-            if p is not None and p.match_id == match_id:
+            if p is None:
+                continue
+            if p.is_bot:
+                self.manager.remove(pid)
+            elif p.match_id == match_id:
                 p.match_id = None
 
     def cancel_from_queues(self, player_id: str) -> None:

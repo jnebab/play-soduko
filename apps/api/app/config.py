@@ -19,6 +19,23 @@ class Settings(BaseSettings):
 
     database_url: str = DEFAULT_DATABASE_URL
     redis_url: str | None = None
+    cors_origins: str = "http://localhost:5173"
+    pool_target: int = 8
+
+    # match tuning
+    countdown_seconds: int = 3
+    min_players: int = 2
+    max_players: int = 4
+    progress_hz: float = 3.0
+    move_rate_limit: int = 25  # max moves / second / connection
+
+    # bot opponent fallback — if no human joins the queue within this window,
+    # a bot is added so Quick Match always becomes a real race.
+    bot_enabled: bool = True
+    bot_wait_seconds: float = 7.0
+    bot_min_move_s: float = 0.9
+    bot_max_move_s: float = 2.4
+    bot_mistake_rate: float = 0.08
 
     @field_validator("database_url", mode="before")
     @classmethod
@@ -30,15 +47,6 @@ class Settings(BaseSettings):
     @classmethod
     def _empty_redis_is_none(cls, v: str | None) -> str | None:
         return v or None
-    cors_origins: str = "http://localhost:5173"
-    pool_target: int = 8
-
-    # match tuning
-    countdown_seconds: int = 3
-    min_players: int = 2
-    max_players: int = 4
-    progress_hz: float = 3.0
-    move_rate_limit: int = 25  # max moves / second / connection
 
     @property
     def cors_list(self) -> list[str]:
