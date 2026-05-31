@@ -13,6 +13,7 @@ os.environ["DATABASE_URL"] = f"sqlite+aiosqlite:///{_db.name}"
 os.environ["POOL_TARGET"] = "0"
 os.environ["REDIS_URL"] = ""
 os.environ["COUNTDOWN_SECONDS"] = "0"
+os.environ["BOT_ENABLED"] = "false"
 
 
 def seed_puzzle(givens: list[int], solution: list[int], difficulty: str = "easy") -> None:

@@ -38,6 +38,13 @@ async def get_or_create_user(session: AsyncSession, user_id: str, handle: str) -
     return user
 
 
+async def ensure_bot_user(user_id: str, handle: str, rating: int) -> None:
+    async with session_scope() as session:
+        if await session.get(User, user_id) is None:
+            session.add(User(id=user_id, handle=handle, rating=rating, is_bot=True))
+            await session.commit()
+
+
 async def _generate_puzzle_row(difficulty: str) -> Puzzle:
     # generation is CPU-bound; keep the event loop responsive
     givens, solution = await asyncio.to_thread(make_puzzle, difficulty)
@@ -191,7 +198,12 @@ async def get_match_summary(match_id: str) -> dict[str, object] | None:
 
 async def leaderboard(limit: int = 20) -> list[dict[str, object]]:
     async with session_scope() as session:
-        rows = await session.scalars(select(User).order_by(col(User.rating).desc()).limit(limit))
+        rows = await session.scalars(
+            select(User)
+            .where(col(User.is_bot).is_(False))
+            .order_by(col(User.rating).desc())
+            .limit(limit)
+        )
         return [
             {"id": u.id, "handle": u.handle, "rating": u.rating}
             for u in rows.all()

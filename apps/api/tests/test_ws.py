@@ -80,6 +80,42 @@ def test_server_decides_winner_and_no_digit_leaks():
         assert over_b["results"][0]["placement"] == 1
 
 
+def test_bot_fallback_starts_a_match_for_a_solo_player():
+    seed_puzzle(GIVENS, SOLUTION, difficulty="easy")
+    from app.main import app
+    from app.runtime import settings as rt
+
+    # enable a fast bot just for this test, then restore
+    rt.bot_enabled = True
+    rt.bot_wait_seconds = 0.3
+    rt.bot_min_move_s = 0.01
+    rt.bot_max_move_s = 0.03
+    rt.bot_mistake_rate = 0.0
+    try:
+        with (
+            TestClient(app) as client,
+            client.websocket_connect("/ws?id=lonely&handle=Lonely") as ws,
+        ):
+            ws.send_json({"t": "joinQueue", "difficulty": "easy"})
+
+            found = _read_until(ws, "matchFound")
+            assert len(found["players"]) == 2
+            bot = next(p for p in found["players"] if p["id"].startswith("bot-"))
+
+            start = _read_until(ws, "matchStart")
+            assert "solution" not in start
+            assert start["givens"] == GIVENS
+
+            over = _read_until(ws, "matchOver")
+            res = {r["playerId"]: r for r in over["results"]}
+            # the idle human loses; the bot completes and wins
+            assert res["lonely"]["placement"] == 2
+            assert res[bot["id"]]["placement"] == 1
+            assert res[bot["id"]]["finishMs"] is not None
+    finally:
+        rt.bot_enabled = False
+
+
 def test_reconnect_replays_snapshot():
     seed_puzzle(GIVENS, SOLUTION, difficulty="easy")
     from app.main import app

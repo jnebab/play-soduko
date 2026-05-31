@@ -26,6 +26,7 @@ class Player:
     rating: int = 1000
     socket: Socket | None = None
     match_id: str | None = None
+    is_bot: bool = False
     # simple per-connection move-rate accounting (token-bucket-ish)
     _window_start: float = 0.0
     _window_count: int = 0
@@ -49,6 +50,15 @@ class ConnectionManager:
         player = Player(id=player_id, handle=handle, rating=rating, socket=socket)
         self.players[player_id] = player
         return player
+
+    def register_bot(self, player_id: str, handle: str, rating: int) -> Player:
+        """A socketless participant (manager.send is a no-op for it)."""
+        player = Player(id=player_id, handle=handle, rating=rating, socket=None, is_bot=True)
+        self.players[player_id] = player
+        return player
+
+    def remove(self, player_id: str) -> None:
+        self.players.pop(player_id, None)
 
     def disconnect(self, player_id: str, socket: Socket) -> None:
         player = self.players.get(player_id)
